@@ -47,6 +47,7 @@ export default class RolloverTodosPlugin extends Plugin {
       rolloverChildren: false,
       rolloverOnFileCreate: true,
       doneStatusMarkers: "xX-",
+      deleteSubTodosFromPreviousDay: false,
     };
     this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
   }
@@ -131,6 +132,56 @@ export default class RolloverTodosPlugin extends Plugin {
     });
   }
 
+  async getCompletedTodosWithChildren(file) {
+    const dn = await this.app.vault.read(file);
+    const dnLines = dn.split(/\r?\n|\r|\n/g);
+
+    return getTodos({
+      lines: dnLines,
+      withChildren: true,
+      doneStatusMarkers: this.settings.doneStatusMarkers,
+      onlyCompleted: true,
+    });
+  }
+
+  async getAllTodosWithHierarchy(file) {
+    const dn = await this.app.vault.read(file);
+    const dnLines = dn.split(/\r?\n|\r|\n/g);
+
+    return getTodos({
+      lines: dnLines,
+      withChildren: true,
+      doneStatusMarkers: this.settings.doneStatusMarkers,
+      preserveHierarchy: true,
+    });
+  }
+
+  separateTodosByStatus(allTodos) {
+    const unfinishedTodos = [];
+    const completedTodos = [];
+    
+    for (let i = 0; i < allTodos.length; i++) {
+      const todo = allTodos[i];
+      const isCompleted = this.isTodoCompleted(todo);
+      
+      if (isCompleted) {
+        completedTodos.push(todo);
+      } else {
+        unfinishedTodos.push(todo);
+      }
+    }
+    
+    return { unfinishedTodos, completedTodos };
+  }
+
+  isTodoCompleted(todoLine) {
+    const match = todoLine.match(/\s*[*+-] \[(.+?)\]/);
+    if (!match) return false;
+    
+    const checkboxContent = match[1];
+    return this.settings.doneStatusMarkers.includes(checkboxContent);
+  }
+
   async sortHeadersIntoHierarchy(file) {
     ///console.log('testing')
     const templateContents = await this.app.vault.read(file);
@@ -210,6 +261,12 @@ export default class RolloverTodosPlugin extends Plugin {
       // get unfinished todos from yesterday, if exist
       let todos_yesterday = await this.getAllUnfinishedTodos(lastDailyNote);
 
+      // If deleteSubTodosFromPreviousDay is enabled, get all todos with hierarchy
+      let allTodosWithHierarchy = [];
+      if (this.settings.deleteSubTodosFromPreviousDay && this.settings.deleteOnComplete) {
+        allTodosWithHierarchy = await this.getAllTodosWithHierarchy(lastDailyNote);
+      }
+
       console.log(
         `rollover-daily-todos: ${todos_yesterday.length} todos found in ${lastDailyNote.basename}.md`
       );
@@ -233,19 +290,46 @@ export default class RolloverTodosPlugin extends Plugin {
       // Potentially filter todos from yesterday for today
       let todosAdded = 0;
       let emptiesToNotAddToTomorrow = 0;
-      let todos_today = !removeEmptyTodos ? todos_yesterday : [];
-      if (removeEmptyTodos) {
-        todos_yesterday.forEach((line, i) => {
-          const trimmedLine = (line || "").trim();
-          if (trimmedLine != "- [ ]" && trimmedLine != "- [  ]") {
-            todos_today.push(line);
-            todosAdded++;
-          } else {
-            emptiesToNotAddToTomorrow++;
-          }
-        });
+      let todos_today = [];
+
+      if (this.settings.deleteSubTodosFromPreviousDay && this.settings.deleteOnComplete) {
+        // Handle sub todos migration with hierarchy preservation
+        const { unfinishedTodos, completedTodos } = this.separateTodosByStatus(allTodosWithHierarchy);
+        
+        // Add unfinished todos and their children to today
+        todos_today = unfinishedTodos;
+        todosAdded = unfinishedTodos.length;
+        
+        // Count empty todos for removal
+        if (removeEmptyTodos) {
+          const nonEmptyTodos = [];
+          todos_today.forEach((line) => {
+            const trimmedLine = (line || "").trim();
+            if (trimmedLine != "- [ ]" && trimmedLine != "- [  ]") {
+              nonEmptyTodos.push(line);
+            } else {
+              emptiesToNotAddToTomorrow++;
+            }
+          });
+          todos_today = nonEmptyTodos;
+          todosAdded = todos_today.length;
+        }
       } else {
-        todosAdded = todos_yesterday.length;
+        // Original logic
+        todos_today = !removeEmptyTodos ? todos_yesterday : [];
+        if (removeEmptyTodos) {
+          todos_yesterday.forEach((line, i) => {
+            const trimmedLine = (line || "").trim();
+            if (trimmedLine != "- [ ]" && trimmedLine != "- [  ]") {
+              todos_today.push(line);
+              todosAdded++;
+            } else {
+              emptiesToNotAddToTomorrow++;
+            }
+          });
+        } else {
+          todosAdded = todos_yesterday.length;
+        }
       }
 
       // get today's content and modify it
@@ -293,9 +377,24 @@ export default class RolloverTodosPlugin extends Plugin {
         };
         let lines = lastDailyNoteContent.split("\n");
 
-        for (let i = lines.length; i >= 0; i--) {
-          if (todos_yesterday.includes(lines[i])) {
-            lines.splice(i, 1);
+        // Handle sub todos deletion if enabled
+        if (this.settings.deleteSubTodosFromPreviousDay && this.settings.deleteOnComplete) {
+          // Get completed todos and their children to remove from yesterday's note
+          const completedTodosWithChildren = await this.getCompletedTodosWithChildren(lastDailyNote);
+          
+          // Remove completed todos and their children from yesterday's note
+          for (let i = lines.length - 1; i >= 0; i--) {
+            const line = lines[i];
+            if (completedTodosWithChildren.some(todo => line.includes(todo))) {
+              lines.splice(i, 1);
+            }
+          }
+        } else {
+          // Original logic: remove only the rolled over todos
+          for (let i = lines.length - 1; i >= 0; i--) {
+            if (todos_yesterday.includes(lines[i])) {
+              lines.splice(i, 1);
+            }
           }
         }
 

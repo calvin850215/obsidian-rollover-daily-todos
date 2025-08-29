@@ -11,6 +11,12 @@ class TodoParser {
   // Boolean that encodes whether nested items should be rolled over
   #withChildren;
 
+  // Boolean that encodes whether to only return completed todos
+  #onlyCompleted;
+
+  // Boolean that encodes whether to only return unfinished todos
+  #onlyUnfinished;
+
   // Parse content with segmentation to allow for Unicode grapheme clusters
   #parseIntoChars(content, contentType = "content") {
     // Use Intl.Segmenter to properly split grapheme clusters if available,
@@ -29,9 +35,11 @@ class TodoParser {
     }
   }
 
-  constructor(lines, withChildren, doneStatusMarkers) {
+  constructor(lines, withChildren, doneStatusMarkers, onlyCompleted = false, onlyUnfinished = false) {
     this.#lines = lines;
     this.#withChildren = withChildren;
+    this.#onlyCompleted = onlyCompleted;
+    this.#onlyUnfinished = onlyUnfinished;
     if (doneStatusMarkers) {
       this.doneStatusMarkers = this.#parseIntoChars(
         doneStatusMarkers,
@@ -122,6 +130,15 @@ class TodoParser {
     for (let l = 0; l < this.#lines.length; l++) {
       const line = this.#lines[l];
       if (this.#isTodo(line)) {
+        // Check if we should only return completed todos
+        if (this.#onlyCompleted && !this.#isCompleted(line)) {
+          continue;
+        }
+        // Check if we should only return unfinished todos
+        if (this.#onlyUnfinished && this.#isCompleted(line)) {
+          continue;
+        }
+        
         todos.push(line);
         if (this.#withChildren && this.#hasChildren(l)) {
           const cs = this.#getChildren(l);
@@ -132,6 +149,15 @@ class TodoParser {
     }
     return todos;
   }
+
+  // Check if a todo is completed
+  #isCompleted(todoLine) {
+    const match = todoLine.match(/\s*[*+-] \[(.+?)\]/);
+    if (!match) return false;
+    
+    const checkboxContent = match[1];
+    return this.doneStatusMarkers.includes(checkboxContent);
+  }
 }
 
 // Utility-function that acts as a thin wrapper around `TodoParser`
@@ -139,7 +165,9 @@ export const getTodos = ({
   lines,
   withChildren = false,
   doneStatusMarkers = null,
+  onlyCompleted = false,
+  onlyUnfinished = false,
 }) => {
-  const todoParser = new TodoParser(lines, withChildren, doneStatusMarkers);
+  const todoParser = new TodoParser(lines, withChildren, doneStatusMarkers, onlyCompleted, onlyUnfinished);
   return todoParser.getTodos();
 };

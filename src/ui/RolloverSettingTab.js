@@ -52,7 +52,7 @@ export default class RolloverSettingTab extends PluginSettingTab {
           })
       );
 
-    new Setting(this.containerEl)
+    const deleteOnCompleteSetting = new Setting(this.containerEl)
       .setName("Delete todos from previous day")
       .setDesc(
         `Once todos are found, they are added to Today's Daily Note. If successful, they are deleted from Yesterday's Daily note. Enabling this is destructive and may result in lost data. Keeping this disabled will simply duplicate them from yesterday's note and place them in the appropriate section. Note that currently, duplicate todos will be deleted regardless of what heading they are in, and which heading you choose from above.`
@@ -62,9 +62,30 @@ export default class RolloverSettingTab extends PluginSettingTab {
           .setValue(this.plugin.settings.deleteOnComplete || false)
           .onChange((value) => {
             this.plugin.settings.deleteOnComplete = value;
+            // If deleteOnComplete is disabled, also disable deleteSubTodosFromPreviousDay
+            if (!value) {
+              this.plugin.settings.deleteSubTodosFromPreviousDay = false;
+            }
             this.plugin.saveSettings();
+            // Refresh the display to update the disabled state
+            this.display();
           })
       );
+
+    new Setting(this.containerEl)
+      .setName("Delete sub todos from previous day")
+      .setDesc(
+        `When enabled (and "Delete todos from previous day" is also enabled), completed sub todos and their parent nodes will remain in yesterday's note, while unfinished todos and their sub todos will be moved to today's note, preserving the original hierarchy structure.`
+      )
+      .addToggle((toggle) =>
+        toggle
+          .setValue(this.plugin.settings.deleteSubTodosFromPreviousDay || false)
+          .onChange((value) => {
+            this.plugin.settings.deleteSubTodosFromPreviousDay = value;
+            this.plugin.saveSettings();
+          })
+      )
+      .setDisabled(!this.plugin.settings.deleteOnComplete);
 
     new Setting(this.containerEl)
       .setName("Remove empty todos in rollover")
